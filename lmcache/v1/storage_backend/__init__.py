@@ -218,6 +218,12 @@ def CreateStorageBackends(
         )
         storage_backends[str(gds_backend)] = gds_backend
 
+    if config.maru_path is not None and "MaruBackend" not in _skip:
+        from lmcache.v1.storage_backend.maru_backend import MaruBackend
+
+        maru_backend = MaruBackend(config, metadata, loop, dst_device)
+        storage_backends[str(maru_backend)] = maru_backend
+
     if config.remote_url is not None and "RemoteBackend" not in _skip:
         assert local_cpu_backend is not None, (
             "Remote backend requires local CPU backend as a buffer."
