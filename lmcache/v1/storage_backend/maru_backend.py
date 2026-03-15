@@ -112,7 +112,8 @@ class MaruBackend(AllocatorBackendInterface):
     # =========================================================================
 
     def _create_handler(
-        self, config: LMCacheEngineConfig,
+        self,
+        config: LMCacheEngineConfig,
     ) -> "MaruHandler":
         """Create and connect a MaruHandler.
 
@@ -125,9 +126,7 @@ class MaruBackend(AllocatorBackendInterface):
         Raises:
             RuntimeError: If MaruHandler connection fails.
         """
-        assert config.maru_path is not None, (
-            "maru_path must be set for MaruBackend"
-        )
+        assert config.maru_path is not None, "maru_path must be set for MaruBackend"
 
         extra = config.extra_config or {}
         maru_config = MaruConfig(
@@ -144,9 +143,7 @@ class MaruBackend(AllocatorBackendInterface):
 
         handler = MaruHandler(maru_config)
         if not handler.connect():
-            raise RuntimeError(
-                f"Failed to connect MaruHandler to {config.maru_path}"
-            )
+            raise RuntimeError(f"Failed to connect MaruHandler to {config.maru_path}")
         logger.debug("[Maru] Connected to %s", config.maru_path)
         return handler
 
@@ -168,9 +165,7 @@ class MaruBackend(AllocatorBackendInterface):
         """
         shapes = metadata.get_shapes()
         dtypes = metadata.get_dtypes()
-        fmt = (
-            MemoryFormat.KV_MLA_FMT if metadata.use_mla else MemoryFormat.KV_2LTD
-        )
+        fmt = MemoryFormat.KV_MLA_FMT if metadata.use_mla else MemoryFormat.KV_2LTD
         chunk_size = self._handler.owned_region_manager.get_chunk_size()
 
         return CxlMemoryAllocator(
@@ -211,8 +206,10 @@ class MaruBackend(AllocatorBackendInterface):
         """
         obj = self.memory_allocator.allocate(shapes, dtypes, fmt)
         if obj is not None:
-            logger.debug("[Maru] allocate rid=%d pid=%d",
-                         *CxlMemoryAllocator.decode_address(obj.metadata.address))
+            logger.debug(
+                "[Maru] allocate rid=%d pid=%d",
+                *CxlMemoryAllocator.decode_address(obj.metadata.address),
+            )
         else:
             logger.debug("[Maru] allocate failed shapes=%s dtypes=%s", shapes, dtypes)
         return obj
@@ -239,9 +236,7 @@ class MaruBackend(AllocatorBackendInterface):
         Returns:
             List of MemoryObj, or None if any allocation fails.
         """
-        return self.memory_allocator.batched_allocate(
-            shapes, dtypes, batch_size, fmt
-        )
+        return self.memory_allocator.batched_allocate(shapes, dtypes, batch_size, fmt)
 
     # =========================================================================
     # Put (async)
@@ -337,12 +332,14 @@ class MaruBackend(AllocatorBackendInterface):
             handle = allocator.create_store_handle(memory_obj)
             key_str = key.to_string()
 
-            await asyncio.to_thread(
-                self._handler.store, key_str, handle
-            )
+            await asyncio.to_thread(self._handler.store, key_str, handle)
 
-            logger.debug("[Maru] store key=%s rid=%d pid=%d",
-                         key, handle.region_id, handle.page_index)
+            logger.debug(
+                "[Maru] store key=%s rid=%d pid=%d",
+                key,
+                handle.region_id,
+                handle.page_index,
+            )
 
         except Exception as e:
             logger.error("[Maru] store failed key=%s: %s", key, e)
@@ -354,9 +351,7 @@ class MaruBackend(AllocatorBackendInterface):
                 try:
                     on_complete_callback(key)
                 except Exception as e:
-                    logger.warning(
-                        "on_complete_callback failed for key %s: %s", key, e
-                    )
+                    logger.warning("on_complete_callback failed for key %s: %s", key, e)
 
     # =========================================================================
     # Get (sync)
@@ -396,15 +391,21 @@ class MaruBackend(AllocatorBackendInterface):
             single_token_size=self._single_token_size,
         )
         if memory_obj is None:
-            logger.debug("[Maru] get_blocking pool miss rid=%d pid=%d",
-                         mem_info.region_id, mem_info.page_index)
+            logger.debug(
+                "[Maru] get_blocking pool miss rid=%d pid=%d",
+                mem_info.region_id,
+                mem_info.page_index,
+            )
             return None
 
         memory_obj.ref_count_up()
 
-        logger.debug("[Maru] get_blocking rid=%d pid=%d size=%d",
-                     mem_info.region_id, mem_info.page_index,
-                     len(mem_info.view))
+        logger.debug(
+            "[Maru] get_blocking rid=%d pid=%d size=%d",
+            mem_info.region_id,
+            mem_info.page_index,
+            len(mem_info.view),
+        )
         return memory_obj
 
     # =========================================================================
@@ -464,9 +465,6 @@ class MaruBackend(AllocatorBackendInterface):
         Returns:
             True if removed successfully.
         """
-        with self.data_lock:
-            self.data.pop(key, None)
-
         key_str = key.to_string()
         result = self._handler.delete(key_str)
         logger.debug("[Maru] remove key=%s success=%s", key, result)
