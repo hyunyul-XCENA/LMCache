@@ -53,6 +53,11 @@ class MaruBackend(AllocatorBackendInterface):
     ):
         super().__init__(dst_device=dst_device)
 
+        if config.use_layerwise:
+            raise NotImplementedError(
+                "MaruBackend does not yet support layerwise KV cache."
+            )
+
         # 1. Config
         self.config = config
         self.loop = loop
@@ -303,7 +308,7 @@ class MaruBackend(AllocatorBackendInterface):
             List of Futures, one per key.
         """
         futures = []
-        for key, memory_obj in zip(keys, memory_objs, strict=False):
+        for key, memory_obj in zip(keys, memory_objs, strict=True):
             future = self.submit_put_task(
                 key, memory_obj, on_complete_callback=on_complete_callback
             )
@@ -425,6 +430,13 @@ class MaruBackend(AllocatorBackendInterface):
         if self._mla_worker_id_as0_mode:
             key = key.with_new_worker_id(0)
 
+        if pin:
+            logger.warning(
+                "[Maru] contains(pin=True) requested but pin is not yet "
+                "supported — proceeding without pin for key=%s",
+                key,
+            )
+
         return self._handler.exists(key.to_string())
 
     def pin(self, key: CacheEngineKey) -> bool:
@@ -476,6 +488,13 @@ class MaruBackend(AllocatorBackendInterface):
 
     def close(self) -> None:
         """Close the backend and underlying MaruHandler."""
+        with self.put_lock:
+            pending = len(self.put_tasks)
+        if pending > 0:
+            logger.warning(
+                "[Maru] closing with %d in-flight put tasks still pending",
+                pending,
+            )
         self.memory_allocator.close()
         self._handler.close()
         logger.info("MaruBackend closed.")
