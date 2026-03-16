@@ -414,6 +414,72 @@ class MaruBackend(AllocatorBackendInterface):
         return memory_obj
 
     # =========================================================================
+    # Async lookup API (used by StorageManager.async_lookup_and_prefetch)
+    # =========================================================================
+
+    async def batched_async_contains(
+        self,
+        lookup_id: str,
+        keys: List[CacheEngineKey],
+        pin: bool = False,
+    ) -> int:
+        """Check how many prefix keys exist on MaruServer.
+
+        Prefix-based: returns the count of contiguous keys starting
+        from index 0 that exist. Stops at first miss.
+
+        Args:
+            lookup_id: Unique request identifier.
+            keys: Keys to check in prefix order.
+            pin: Whether to pin. Not supported; logged as debug.
+
+        Returns:
+            Number of prefix-contiguous keys that exist.
+        """
+
+        def _contains_prefix() -> int:
+            num_hit = 0
+            for key in keys:
+                if not self.contains(key):
+                    break
+                num_hit += 1
+            return num_hit
+
+        return await asyncio.to_thread(_contains_prefix)
+
+    async def batched_get_non_blocking(
+        self,
+        lookup_id: str,
+        keys: list[CacheEngineKey],
+        transfer_spec: Any = None,
+    ) -> list[MemoryObj]:
+        """Non-blocking batched get via CXL direct read.
+
+        Each key triggers a metadata lookup on MaruServer followed by
+        a zero-copy CXL memory read. Stops at first miss and returns
+        the prefix that was successfully retrieved.
+
+        Args:
+            lookup_id: Unique request identifier.
+            keys: Keys to retrieve (already confirmed by contains).
+            transfer_spec: Unused.
+
+        Returns:
+            List of MemoryObjs backed by CXL memory.
+        """
+
+        def _get_batch() -> list[MemoryObj]:
+            results: list[MemoryObj] = []
+            for key in keys:
+                mem_obj = self.get_blocking(key)
+                if mem_obj is None:
+                    break
+                results.append(mem_obj)
+            return results
+
+        return await asyncio.to_thread(_get_batch)
+
+    # =========================================================================
     # Contains / Pin / Unpin / Remove
     # =========================================================================
 
