@@ -133,9 +133,14 @@ class MaruBackend(AllocatorBackendInterface):
         """
         assert config.maru_path is not None, "maru_path must be set for MaruBackend"
 
+        # Convert maru:// scheme to tcp:// for ZMQ
+        server_url = config.maru_path
+        if server_url.startswith("maru://"):
+            server_url = "tcp://" + server_url[len("maru://"):]
+
         extra = config.extra_config or {}
         maru_config = MaruConfig(
-            server_url=config.maru_path,
+            server_url=server_url,
             instance_id=extra.get("maru_instance_id"),
             pool_size=self._parse_pool_size(config.maru_pool_size),
             chunk_size_bytes=self._full_chunk_size_bytes,
@@ -404,6 +409,7 @@ class MaruBackend(AllocatorBackendInterface):
             return None
 
         memory_obj.ref_count_up()
+        memory_obj.pin()
 
         logger.debug(
             "[Maru] get_blocking rid=%d pid=%d size=%d",
