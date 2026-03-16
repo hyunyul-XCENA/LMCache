@@ -430,13 +430,6 @@ class MaruBackend(AllocatorBackendInterface):
         if self._mla_worker_id_as0_mode:
             key = key.with_new_worker_id(0)
 
-        if pin:
-            logger.warning(
-                "[Maru] contains(pin=True) requested but pin is not yet "
-                "supported — proceeding without pin for key=%s",
-                key,
-            )
-
         return self._handler.exists(key.to_string())
 
     def pin(self, key: CacheEngineKey) -> bool:
