@@ -336,6 +336,7 @@ class MaruBackend(AllocatorBackendInterface):
             memory_obj: MemoryObj backed by CXL memory.
             on_complete_callback: Optional callback after registration.
         """
+        success = False
         try:
             allocator = self.memory_allocator
             assert isinstance(allocator, CxlMemoryAdapter)
@@ -343,6 +344,7 @@ class MaruBackend(AllocatorBackendInterface):
             key_str = key.to_string()
 
             await asyncio.to_thread(self._handler.store, key_str, handle)
+            success = True
 
             logger.debug(
                 "[Maru] store key=%s rid=%d pid=%d",
@@ -357,7 +359,7 @@ class MaruBackend(AllocatorBackendInterface):
             with self.put_lock:
                 self.put_tasks.discard(key)
 
-            if on_complete_callback is not None:
+            if success and on_complete_callback is not None:
                 try:
                     on_complete_callback(key)
                 except Exception as e:
