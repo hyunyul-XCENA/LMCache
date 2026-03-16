@@ -9,7 +9,7 @@ import threading
 
 # Third Party
 from maru import MaruConfig, MaruHandler
-from maru_lmcache import CxlMemoryAllocator
+from maru_lmcache import CxlMemoryAdapter
 import torch
 
 # First Party
@@ -31,7 +31,7 @@ logger = init_logger(__name__)
 class MaruBackend(AllocatorBackendInterface):
     """Maru CXL shared memory storage backend.
 
-    Implements AllocatorBackendInterface with its own CxlMemoryAllocator.
+    Implements AllocatorBackendInterface with its own CxlMemoryAdapter.
     No LocalCPUBackend needed — data lives directly in CXL mmap memory.
 
     Put is async (Future): metadata registration via RPC.
@@ -154,21 +154,21 @@ class MaruBackend(AllocatorBackendInterface):
     def initialize_allocator(
         self, config: LMCacheEngineConfig, metadata: LMCacheMetadata
     ) -> MemoryAllocatorInterface:
-        """Create CxlMemoryAllocator backed by the connected handler.
+        """Create CxlMemoryAdapter backed by the connected handler.
 
         Args:
             config: LMCache engine configuration.
             metadata: LMCache engine metadata.
 
         Returns:
-            CxlMemoryAllocator instance.
+            CxlMemoryAdapter instance.
         """
         shapes = metadata.get_shapes()
         dtypes = metadata.get_dtypes()
         fmt = MemoryFormat.KV_MLA_FMT if metadata.use_mla else MemoryFormat.KV_2LTD
-        chunk_size = self._handler.owned_region_manager.get_chunk_size()
+        chunk_size = self._handler.get_chunk_size()
 
-        return CxlMemoryAllocator(
+        return CxlMemoryAdapter(
             handler=self._handler,
             shapes=shapes,
             dtypes=dtypes,
@@ -177,7 +177,7 @@ class MaruBackend(AllocatorBackendInterface):
         )
 
     def get_memory_allocator(self) -> MemoryAllocatorInterface:
-        """Returns the underlying CxlMemoryAllocator."""
+        """Returns the underlying CxlMemoryAdapter."""
         return self.memory_allocator
 
     def get_allocator_backend(self) -> "MaruBackend":
@@ -192,7 +192,7 @@ class MaruBackend(AllocatorBackendInterface):
         eviction: bool = True,
         busy_loop: bool = True,
     ) -> Optional[MemoryObj]:
-        """Allocate CXL-backed memory via CxlMemoryAllocator.
+        """Allocate CXL-backed memory via CxlMemoryAdapter.
 
         Args:
             shapes: Tensor shape(s).
@@ -208,7 +208,7 @@ class MaruBackend(AllocatorBackendInterface):
         if obj is not None:
             logger.debug(
                 "[Maru] allocate rid=%d pid=%d",
-                *CxlMemoryAllocator.decode_address(obj.metadata.address),
+                *CxlMemoryAdapter.decode_address(obj.metadata.address),
             )
         else:
             logger.debug("[Maru] allocate failed shapes=%s dtypes=%s", shapes, dtypes)
@@ -318,7 +318,7 @@ class MaruBackend(AllocatorBackendInterface):
     ) -> None:
         """Register KV metadata with MaruServer (runs in event loop).
 
-        Uses CxlMemoryAllocator.create_store_handle() to extract
+        Uses CxlMemoryAdapter.create_store_handle() to extract
         (region_id, page_index) from the MemoryObj's encoded address.
 
         Args:
@@ -328,7 +328,7 @@ class MaruBackend(AllocatorBackendInterface):
         """
         try:
             allocator = self.memory_allocator
-            assert isinstance(allocator, CxlMemoryAllocator)
+            assert isinstance(allocator, CxlMemoryAdapter)
             handle = allocator.create_store_handle(memory_obj)
             key_str = key.to_string()
 
@@ -364,7 +364,7 @@ class MaruBackend(AllocatorBackendInterface):
         """Blocking get: read KV cache directly from CXL memory.
 
         Queries MaruServer for metadata, then returns a MemoryObj
-        via CxlMemoryAllocator.get_by_location().
+        via CxlMemoryAdapter.get_by_location().
 
         Args:
             key: The cache key.
@@ -382,7 +382,7 @@ class MaruBackend(AllocatorBackendInterface):
             return None
 
         allocator = self.memory_allocator
-        assert isinstance(allocator, CxlMemoryAllocator)
+        assert isinstance(allocator, CxlMemoryAdapter)
 
         memory_obj = allocator.get_by_location(
             region_id=mem_info.region_id,
