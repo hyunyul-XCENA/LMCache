@@ -136,7 +136,7 @@ class MaruBackend(AllocatorBackendInterface):
         # Convert maru:// scheme to tcp:// for ZMQ
         server_url = config.maru_path
         if server_url.startswith("maru://"):
-            server_url = "tcp://" + server_url[len("maru://"):]
+            server_url = "tcp://" + server_url[len("maru://") :]
 
         extra = config.extra_config or {}
         maru_kwargs = dict(
