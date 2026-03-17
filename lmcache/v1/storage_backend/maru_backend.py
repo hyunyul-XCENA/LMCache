@@ -9,9 +9,9 @@ import threading
 import time
 
 # Third Party
-import prometheus_client
 from maru import MaruConfig, MaruHandler
 from maru_lmcache import CxlMemoryAdapter
+import prometheus_client
 import torch
 
 # First Party
