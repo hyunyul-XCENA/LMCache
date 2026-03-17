@@ -53,6 +53,11 @@ class MaruBackend(AllocatorBackendInterface):
     ):
         super().__init__(dst_device=dst_device)
 
+        if config.use_layerwise:
+            raise NotImplementedError(
+                "MaruBackend does not yet support layerwise KV cache."
+            )
+
         # 1. Config
         self.config = config
         self.loop = loop
@@ -128,9 +133,14 @@ class MaruBackend(AllocatorBackendInterface):
         """
         assert config.maru_path is not None, "maru_path must be set for MaruBackend"
 
+        # Convert maru:// scheme to tcp:// for ZMQ
+        server_url = config.maru_path
+        if server_url.startswith("maru://"):
+            server_url = "tcp://" + server_url[len("maru://"):]
+
         extra = config.extra_config or {}
         maru_config = MaruConfig(
-            server_url=config.maru_path,
+            server_url=server_url,
             instance_id=extra.get("maru_instance_id"),
             pool_size=self._parse_pool_size(config.maru_pool_size),
             chunk_size_bytes=self._full_chunk_size_bytes,
@@ -303,7 +313,7 @@ class MaruBackend(AllocatorBackendInterface):
             List of Futures, one per key.
         """
         futures = []
-        for key, memory_obj in zip(keys, memory_objs, strict=False):
+        for key, memory_obj in zip(keys, memory_objs, strict=True):
             future = self.submit_put_task(
                 key, memory_obj, on_complete_callback=on_complete_callback
             )
@@ -326,6 +336,7 @@ class MaruBackend(AllocatorBackendInterface):
             memory_obj: MemoryObj backed by CXL memory.
             on_complete_callback: Optional callback after registration.
         """
+        success = False
         try:
             allocator = self.memory_allocator
             assert isinstance(allocator, CxlMemoryAdapter)
@@ -333,6 +344,7 @@ class MaruBackend(AllocatorBackendInterface):
             key_str = key.to_string()
 
             await asyncio.to_thread(self._handler.store, key_str, handle)
+            success = True
 
             logger.debug(
                 "[Maru] store key=%s rid=%d pid=%d",
@@ -347,7 +359,7 @@ class MaruBackend(AllocatorBackendInterface):
             with self.put_lock:
                 self.put_tasks.discard(key)
 
-            if on_complete_callback is not None:
+            if success and on_complete_callback is not None:
                 try:
                     on_complete_callback(key)
                 except Exception as e:
@@ -399,6 +411,7 @@ class MaruBackend(AllocatorBackendInterface):
             return None
 
         memory_obj.ref_count_up()
+        memory_obj.pin()
 
         logger.debug(
             "[Maru] get_blocking rid=%d pid=%d size=%d",
@@ -407,6 +420,72 @@ class MaruBackend(AllocatorBackendInterface):
             len(mem_info.view),
         )
         return memory_obj
+
+    # =========================================================================
+    # Async lookup API (used by StorageManager.async_lookup_and_prefetch)
+    # =========================================================================
+
+    async def batched_async_contains(
+        self,
+        lookup_id: str,
+        keys: List[CacheEngineKey],
+        pin: bool = False,
+    ) -> int:
+        """Check how many prefix keys exist on MaruServer.
+
+        Prefix-based: returns the count of contiguous keys starting
+        from index 0 that exist. Stops at first miss.
+
+        Args:
+            lookup_id: Unique request identifier.
+            keys: Keys to check in prefix order.
+            pin: Whether to pin. Not supported; logged as debug.
+
+        Returns:
+            Number of prefix-contiguous keys that exist.
+        """
+
+        def _contains_prefix() -> int:
+            num_hit = 0
+            for key in keys:
+                if not self.contains(key):
+                    break
+                num_hit += 1
+            return num_hit
+
+        return await asyncio.to_thread(_contains_prefix)
+
+    async def batched_get_non_blocking(
+        self,
+        lookup_id: str,
+        keys: list[CacheEngineKey],
+        transfer_spec: Any = None,
+    ) -> list[MemoryObj]:
+        """Non-blocking batched get via CXL direct read.
+
+        Each key triggers a metadata lookup on MaruServer followed by
+        a zero-copy CXL memory read. Stops at first miss and returns
+        the prefix that was successfully retrieved.
+
+        Args:
+            lookup_id: Unique request identifier.
+            keys: Keys to retrieve (already confirmed by contains).
+            transfer_spec: Unused.
+
+        Returns:
+            List of MemoryObjs backed by CXL memory.
+        """
+
+        def _get_batch() -> list[MemoryObj]:
+            results: list[MemoryObj] = []
+            for key in keys:
+                mem_obj = self.get_blocking(key)
+                if mem_obj is None:
+                    break
+                results.append(mem_obj)
+            return results
+
+        return await asyncio.to_thread(_get_batch)
 
     # =========================================================================
     # Contains / Pin / Unpin / Remove
@@ -476,6 +555,13 @@ class MaruBackend(AllocatorBackendInterface):
 
     def close(self) -> None:
         """Close the backend and underlying MaruHandler."""
+        with self.put_lock:
+            pending = len(self.put_tasks)
+        if pending > 0:
+            logger.warning(
+                "[Maru] closing with %d in-flight put tasks still pending",
+                pending,
+            )
         self.memory_allocator.close()
         self._handler.close()
         logger.info("MaruBackend closed.")
