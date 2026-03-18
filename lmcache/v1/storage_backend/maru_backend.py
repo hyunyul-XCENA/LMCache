@@ -152,12 +152,23 @@ class MaruBackend(AllocatorBackendInterface):
         )
         pool_id = extra.get("maru_pool_id")
         if pool_id is not None:
-            if isinstance(pool_id, list):
-                maru_kwargs["pool_id"] = [int(p) for p in pool_id]
-            elif isinstance(pool_id, str) and "," in pool_id:
-                maru_kwargs["pool_id"] = [int(p.strip()) for p in pool_id.split(",")]
-            else:
-                maru_kwargs["pool_id"] = int(pool_id)
+            try:
+                if isinstance(pool_id, list):
+                    if pool_id:
+                        maru_kwargs["pool_id"] = [int(p) for p in pool_id]
+                elif isinstance(pool_id, str):
+                    stripped = pool_id.strip()
+                    if stripped:
+                        if "," in stripped:
+                            maru_kwargs["pool_id"] = [
+                                int(p.strip()) for p in stripped.split(",") if p.strip()
+                            ]
+                        else:
+                            maru_kwargs["pool_id"] = int(stripped)
+                else:
+                    maru_kwargs["pool_id"] = int(pool_id)
+            except (ValueError, TypeError) as e:
+                raise ValueError(f"Invalid maru_pool_id={pool_id!r}: {e}") from e
         maru_config = MaruConfig(**maru_kwargs)
 
         handler = MaruHandler(maru_config)
