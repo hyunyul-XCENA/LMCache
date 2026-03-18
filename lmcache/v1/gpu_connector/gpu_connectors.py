@@ -482,8 +482,13 @@ class VLLMPagedMemGPUConnectorV3(GPUConnectorInterface):
                 self.block_size,
             )
 
-    @_lmcache_nvtx_annotate
-    def from_gpu(self, memory_obj: MemoryObj, start: int, end: int, **kwargs):
+    def _from_gpu_enqueue(
+        self, memory_obj: MemoryObj, start: int, end: int, **kwargs
+    ):
+        """Enqueue GPU→Host DMA on store_stream without synchronizing.
+
+        Caller is responsible for stream synchronization.
+        """
         assert memory_obj.raw_tensor is not None
         assert "slot_mapping" in kwargs
 
@@ -531,14 +536,14 @@ class VLLMPagedMemGPUConnectorV3(GPUConnectorInterface):
                     assert memory_obj_tensor is not None
                     memory_obj_tensor.copy_(tmp_gpu_buffer, non_blocking=True)
 
-        if not memory_obj.raw_tensor.is_cuda:
-            # Force a synchronize if the target buffer is NOT CUDA device
-            # NOTE: for better performance, we may not want to sync for every
-            # memory object
-            self.store_stream.synchronize()
-
         if self.use_mla:
             memory_obj.metadata.fmt = MemoryFormat.KV_MLA_FMT
+
+    @_lmcache_nvtx_annotate
+    def from_gpu(self, memory_obj: MemoryObj, start: int, end: int, **kwargs):
+        self._from_gpu_enqueue(memory_obj, start, end, **kwargs)
+        if not memory_obj.raw_tensor.is_cuda:
+            self.store_stream.synchronize()
 
     def batched_to_gpu(self, memory_objs, starts, ends, **kwargs):
         with torch.cuda.stream(self.load_stream):
@@ -547,8 +552,13 @@ class VLLMPagedMemGPUConnectorV3(GPUConnectorInterface):
         self.load_stream.synchronize()
 
     def batched_from_gpu(self, memory_objs, starts, ends, **kwargs):
+        need_sync = False
         for memory_obj, start, end in zip(memory_objs, starts, ends, strict=False):
-            self.from_gpu(memory_obj, start, end, **kwargs)
+            self._from_gpu_enqueue(memory_obj, start, end, **kwargs)
+            if not memory_obj.raw_tensor.is_cuda:
+                need_sync = True
+        if need_sync:
+            self.store_stream.synchronize()
 
     def get_shape(self, num_tokens: int) -> torch.Size:
         raise NotImplementedError
