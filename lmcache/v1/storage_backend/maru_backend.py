@@ -310,7 +310,7 @@ class MaruBackend(AllocatorBackendInterface):
             on_complete_callback: Optional per-key callback.
 
         Returns:
-            List of Futures, one per key.
+            List containing a single Future for the entire batch.
         """
         with self.put_lock:
             self.put_tasks.update(keys)
@@ -373,44 +373,36 @@ class MaruBackend(AllocatorBackendInterface):
         on_complete_callback: Optional[Callable[[CacheEngineKey], None]] = None,
     ) -> None:
         """Register multiple KV metadata entries via single batch_store RPC."""
-        allocator = self.memory_allocator
-        assert isinstance(allocator, CxlMemoryAdapter)
-
-        key_strs = [k.to_string() for k in keys]
-        handles = [allocator.create_store_handle(m) for m in memory_objs]
-
+        results: Optional[list[bool]] = None
         try:
-            t0 = time.perf_counter()
+            allocator = self.memory_allocator
+            assert isinstance(allocator, CxlMemoryAdapter)
+
+            key_strs = [k.to_string() for k in keys]
+            handles = [allocator.create_store_handle(m) for m in memory_objs]
+
             results = await asyncio.to_thread(
                 self._handler.batch_store, key_strs, handles
             )
-            elapsed = time.perf_counter() - t0
-            self._maru_store_latency.observe(elapsed)
-
-            failed = sum(1 for r in results if not r)
-            if failed:
-                self._maru_put_failed.inc(failed)
             logger.debug(
-                "[Maru] batch_store %d/%d ok in %.3fms",
-                len(results) - failed,
-                len(results),
-                elapsed * 1000,
+                "[Maru] batch_store %d/%d ok", sum(results), len(results)
             )
         except Exception as e:
-            self._maru_put_failed.inc(len(keys))
             logger.error("[Maru] batch_store failed: %s", e)
         finally:
             with self.put_lock:
                 self.put_tasks.difference_update(keys)
 
             if on_complete_callback is not None:
-                for key in keys:
-                    try:
-                        on_complete_callback(key)
-                    except Exception as e:
-                        logger.warning(
-                            "on_complete_callback failed for key %s: %s", key, e
-                        )
+                for i, key in enumerate(keys):
+                    if results is not None and i < len(results) and results[i]:
+                        try:
+                            on_complete_callback(key)
+                        except Exception as e:
+                            logger.warning(
+                                "on_complete_callback failed for key %s: %s",
+                                key, e,
+                            )
 
     # =========================================================================
     # Get (sync)
@@ -484,9 +476,7 @@ class MaruBackend(AllocatorBackendInterface):
             keys = [k.with_new_worker_id(0) for k in keys]
 
         key_strs = [k.to_string() for k in keys]
-        t0 = time.perf_counter()
         mem_infos = self._handler.batch_retrieve(key_strs)
-        self._maru_retrieve_latency.observe(time.perf_counter() - t0)
 
         allocator = self.memory_allocator
         assert isinstance(allocator, CxlMemoryAdapter)
@@ -494,7 +484,6 @@ class MaruBackend(AllocatorBackendInterface):
         results: List[Optional[MemoryObj]] = []
         for mem_info in mem_infos:
             if mem_info is None:
-                self._maru_get_failed.inc()
                 results.append(None)
                 continue
             memory_obj = allocator.get_by_location(
@@ -504,7 +493,6 @@ class MaruBackend(AllocatorBackendInterface):
                 single_token_size=self._single_token_size,
             )
             if memory_obj is None:
-                self._maru_get_failed.inc()
                 results.append(None)
                 continue
             memory_obj.ref_count_up()
@@ -578,9 +566,7 @@ class MaruBackend(AllocatorBackendInterface):
                 actual_keys = list(keys)
 
             key_strs = [k.to_string() for k in actual_keys]
-            t0 = time.perf_counter()
             mem_infos = self._handler.batch_retrieve(key_strs)
-            self._maru_retrieve_latency.observe(time.perf_counter() - t0)
 
             allocator = self.memory_allocator
             assert isinstance(allocator, CxlMemoryAdapter)
