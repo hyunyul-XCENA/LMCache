@@ -312,6 +312,9 @@ class MaruBackend(AllocatorBackendInterface):
         Returns:
             List containing a single Future for the entire batch.
         """
+        for memory_obj in memory_objs:
+            assert memory_obj.tensor is not None
+
         with self.put_lock:
             self.put_tasks.update(keys)
 
@@ -498,6 +501,9 @@ class MaruBackend(AllocatorBackendInterface):
             memory_obj.ref_count_up()
             memory_obj.pin()
             results.append(memory_obj)
+
+        hits = sum(1 for r in results if r is not None)
+        logger.debug("[Maru] batch_retrieve %d/%d hits", hits, len(results))
         return results
 
     # =========================================================================
@@ -523,20 +529,7 @@ class MaruBackend(AllocatorBackendInterface):
         Returns:
             Number of prefix-contiguous keys that exist.
         """
-        if self._mla_worker_id_as0_mode:
-            keys = [k.with_new_worker_id(0) for k in keys]
-
-        def _batch_contains_prefix() -> int:
-            key_strs = [k.to_string() for k in keys]
-            results = self._handler.batch_exists(key_strs)
-            num_hit = 0
-            for exists in results:
-                if not exists:
-                    break
-                num_hit += 1
-            return num_hit
-
-        return await asyncio.to_thread(_batch_contains_prefix)
+        return await asyncio.to_thread(self.batched_contains, keys, pin)
 
     async def batched_get_non_blocking(
         self,
@@ -586,6 +579,10 @@ class MaruBackend(AllocatorBackendInterface):
                 memory_obj.ref_count_up()
                 memory_obj.pin()
                 results.append(memory_obj)
+
+            logger.debug(
+                "[Maru] batch_get_non_blocking %d/%d hits", len(results), len(keys)
+            )
             return results
 
         return await asyncio.to_thread(_batch_get)
