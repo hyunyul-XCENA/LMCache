@@ -136,7 +136,7 @@ class MaruBackend(AllocatorBackendInterface):
         # Convert maru:// scheme to tcp:// for ZMQ
         server_url = config.maru_path
         if server_url.startswith("maru://"):
-            server_url = "tcp://" + server_url[len("maru://"):]
+            server_url = "tcp://" + server_url[len("maru://") :]
 
         extra = config.extra_config or {}
         maru_config = MaruConfig(
@@ -384,9 +384,8 @@ class MaruBackend(AllocatorBackendInterface):
             results = await asyncio.to_thread(
                 self._handler.batch_store, key_strs, handles
             )
-            logger.debug(
-                "[Maru] batch_store %d/%d ok", sum(results), len(results)
-            )
+            if results is not None:
+                logger.debug("[Maru] batch_store %d/%d ok", sum(results), len(results))
         except Exception as e:
             logger.error("[Maru] batch_store failed: %s", e)
         finally:
@@ -401,7 +400,8 @@ class MaruBackend(AllocatorBackendInterface):
                         except Exception as e:
                             logger.warning(
                                 "on_complete_callback failed for key %s: %s",
-                                key, e,
+                                key,
+                                e,
                             )
 
     # =========================================================================
